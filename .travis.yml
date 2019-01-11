@@ -1,0 +1,114 @@
+language: php
+
+sudo: false
+cache:
+  directories:
+    - $HOME/.composer/cache
+
+addons:
+  apt:
+    packages:
+      - parallel
+
+notifications:
+  slack:
+    secure: N2BzbmdyPm5PdIA8/m/wD/i90sUryPAUTmlPs7tSanKDyhoFC1K4wMCec696UEmW4fqmT6orCNSL1aP0pROli2BOhcvhHqH0YN9cTQaM+tjw3mAtSUE2b1Z2nfBOwZev1yXVufbauoG/lYGXtl7Bb1K9NMNiJcMY/6v3AMkVFIYsW76CPRXHqwsG6QiTDfmkNFUl3gUO1vBZ+Pv5Tq0QBDKNNpH5CSFd41AoFY/CNDYIXBeBpzExnpk2jJ2njzJnhsL172R6eFb0mO4BmfFy9sozS7lBuhG3fwscVcrNapreG6SpK0LE7g39PVMT0+r5Wx83U7moz4poorDQV61lS2eR3SeKTUP2aou54HjDQRkKce5dWhdqcGG6unTTsh3SIeH6BtRql3LzrIXlcIfGHus7gR8kpjALOWNoNBHqly7IxVL/gdsblWehFyy6jE6jKgPuzzE3VOWwyAYA+xGKwWTngJ1REduEdlO7dTxPC5LjHxKTUo2VBcCDhAAJWu6OT8FVsSvwYqI+PxB38Tf9e8Sf8PksPOGlbzgMaZ0hpDXtFrKD1X32HmeLXZmiSwNea4Ws6DeGuvzcTfXwZ0nPX8J6Mpn6lHe/ASueMgJxh2xnk5I5rvQh8PuoIgN5r+IqIxK/2wX8B2PuQ2rp8C77dATerVpuGzoMzvj9V4wNVhw=
+
+env:
+  global:
+    secure:
+
+before_install:
+  - phpenv config-rm xdebug.ini
+  - composer self-update
+  - composer --version
+  - if [ "$GITHUB_COMPOSER_AUTH" ]; then composer config -g github-oauth.github.com $GITHUB_COMPOSER_AUTH; fi
+
+jobs:
+  include:
+    - &lint
+      stage: test
+      php: 7.2
+      env: PHP Lint
+      before_install: skip
+      install: skip
+      branches:
+        except:
+          - /^latest/
+      script: find . -name \*.php ! -path "./vendor/*" | parallel --gnu php -d display_errors=stderr -l {} > /dev/null \;
+    - <<: *lint
+      php: 7.1
+    - <<: *lint
+      php: 7.0
+    - <<: *lint
+      php: 5.6
+
+    - &phpunit
+      stage: test
+      php: 7.2
+      env: PHPUnit
+      before_script: composer install
+      script: vendor/bin/phpunit Tests/Unit/
+      branches:
+        except:
+          - /^latest/
+    - <<: *phpunit
+      php: 7.1
+    - <<: *phpunit
+      php: 7.0
+    - <<: *phpunit
+      php: 5.6
+      before_script: composer update --with-dependencies phpunit/phpunit
+    - <<: *phpunit
+      php: 7.2
+      env: PHPUnit=latest
+      before_script:
+        - composer install
+        - composer update
+
+    - &release
+      stage: release
+      php: 7.2
+      branches:
+        except:
+          - /^latest/
+      before_script:
+        - composer global require kherge/box:^2.7
+        - composer install --no-ansi --no-interaction --no-dev --no-progress --classmap-authoritative
+        - mkdir bin
+      script:
+        - php -d phar.readonly=0 $HOME/.composer/vendor/bin/box build
+        - php bin/surf.phar --version
+      deploy: &github
+        provider: releases
+        api_key:
+          secure: aSVx7EqVUkp+RNH4suLAtN5uXW/UpkmWD1zUlzf5gjiikF0QkombwElc74T2vD1vyFDOLkL/Mm2jRPbpuZmP6ZU8Tb8rlCYAo/5015362dloJbzZwY82VxEpTBjZ3gEcJdpAKXLdaZPiILnCTkQ46uSk8uKLVIhf4b4/FnPlB4z6OjVM32ZE/F0LZxZ+B5K3wvky5PuQiUlT8EDkAbZwNi694gwA/x9HVF77Z6wopkYxXzwno0AxLGBYShtwBQ1tts3IBqNxDsv8MuYtFmVHAUkDZHiQcsThpBsPOmybavir5UlfHbnqlnHlTUIW43+aQYCsvXwVYgva9Gmc9tOHaGn2ed9QyANguXAMmFQSG+NvWcAcVyBJZ7Y5s/WGkxLMGsdj2xiS+1p0h5lDjcckdubuY/CD0+prmNQDPlvnXAn/XtYnN7UvLmhMZZ0S1oMKuCwQv8DeeJPCi/1Dn3B8YJpD3GkJdLJxY14HcVN+ztF/V+J621vqYaUfhN9bRrOqwgYZOmUDVjj4WAQ0VpoFJzCjH2IHz4+yqzHO5GrPO/Ey2+peq2jt1VavDcfc0Cdqe3FLfRQDmJexDjjR1SaR6A4NhoPBtWjOG0EMDrJpvYm6lIJ5MkmZ2st5TvkZgXtkXAjKTvCF9XIrophaBvHZFpaFnb0HhYsH7HyWQ43X8uA=
+        file: bin/surf.phar
+        skip_cleanup: true
+        draft: true
+        on:
+          repo: TYPO3/Surf
+          tags: true
+
+    - <<: *release
+      before_deploy:
+        # Set up git user name and tag this commit
+        - git config --local user.name "t3easy"
+        - git config --local user.email "3628035+t3easy@users.noreply.github.com"
+        - git tag -a -m -f latest
+      deploy:
+        <<: *github
+        name: master
+        prerelease: true
+        draft: true
+        overwrite: true
+        on:
+          repo: TYPO3/Surf
+          branch: master
+
+  allow_failures:
+    - php: 7.2
+      env: PHPUnit=latest
+
+#after_success:
+#  - .travis/push-documentation.sh
